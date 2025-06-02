@@ -2,9 +2,9 @@ import 'dart:async';
 import 'dart:isolate';
 import 'dart:ui';
 
-import 'package:ejemplo7/firebase_options.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_database/firebase_database.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
@@ -14,26 +14,17 @@ const platform = MethodChannel('flutter_overlay_channel');
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
-   
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
-
+  await Firebase.initializeApp();
   runApp(const MyApp());
 }
 
 @pragma("vm:entry-point")
-void overlayMain() async {
+void overlayMain() {
   WidgetsFlutterBinding.ensureInitialized();
-   await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
-
-  runApp(
-    const  OverlayPage(),
-    
-  );
+  
+  Firebase.initializeApp().then((_) {
+    runApp(const OverlayPage());
+  });
 }
 
 class MyApp extends StatelessWidget {
@@ -55,95 +46,94 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
- 
+class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
+  bool _isOverlayActive = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _setupOverlayListener();
-   iniciarGeolocalizacion();
+    _checkLocationPermission();
   }
 
-  void iniciarGeolocalizacion() async {
-     final perm = await Geolocator.checkPermission();
-     if (perm != LocationPermission.whileInUse) Geolocator.requestPermission();
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
   }
 
-  void _setupOverlayListener()  {
-       final receivePort = ReceivePort();
-  IsolateNameServer.registerPortWithName(receivePort.sendPort, 'overlay_channel');
-
-  receivePort.listen((message) async {
-    debugPrint('💬 Mensaje desde overlay: $message');
-    // Aquí manejas los datos del overlay
-     await platform.invokeMethod('bringToFront');
-    ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Mensaje del overlay: $message')),
-      );
-  });
-    
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && _isOverlayActive) {
+      FlutterOverlayWindow.shareData('resume_app');
+    }
   }
 
+  Future<void> _checkLocationPermission() async {
+    final perm = await Geolocator.checkPermission();
+    if (perm != LocationPermission.whileInUse && perm != LocationPermission.always) {
+      await Geolocator.requestPermission();
+    }
+  }
+
+  void _setupOverlayListener() {
+    final receivePort = ReceivePort();
+    IsolateNameServer.registerPortWithName(receivePort.sendPort, 'overlay_channel');
+
+    receivePort.listen((message) async {
+      debugPrint('Mensaje desde overlay: $message');
+      if (message == 'overlay_closed') {
+        setState(() => _isOverlayActive = false);
+      }
+      await platform.invokeMethod('bringToFront');
+    });
+  }
 
   Future<void> _showOverlay() async {
-    final hasPermission = await FlutterOverlayWindow.isPermissionGranted();
-
-    if (!hasPermission) {
+    if (!await FlutterOverlayWindow.isPermissionGranted()) {
       await FlutterOverlayWindow.requestPermission();
-    }
-
-    if (await FlutterOverlayWindow.isPermissionGranted()) {
-      if (await FlutterOverlayWindow.isActive()) {
+      if (!await FlutterOverlayWindow.isPermissionGranted()) {
+        debugPrint('Permiso denegado para mostrar overlay');
         return;
       }
-       
-      await FlutterOverlayWindow.showOverlay(
-        enableDrag: true,
-        overlayTitle: "TAXICORP",
-        overlayContent: 'Estas activo',
-        flag: OverlayFlag.defaultFlag,
-        visibility: NotificationVisibility.visibilityPublic,
-        positionGravity: PositionGravity.auto,
-        height: (MediaQuery.of(context).size.height * 0.6).toInt(),
-        width: WindowSize.matchParent,
-        startPosition: const OverlayPosition(0, -259),
-      );
-    } else {
-      debugPrint('Permiso DENEGADO: Mostrar sobre otras apps');
     }
+
+    if (await FlutterOverlayWindow.isActive()) return;
+
+    await FlutterOverlayWindow.showOverlay(
+      enableDrag: true,
+      overlayTitle: "TAXICORP",
+      overlayContent: 'Estás activo',
+      flag: OverlayFlag.defaultFlag,
+      visibility: NotificationVisibility.visibilityPublic,
+      positionGravity: PositionGravity.auto,
+      height: 200,
+      width: WindowSize.matchParent,
+    );
+
+    setState(() => _isOverlayActive = true);
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Overlay Example')),
+      appBar: AppBar(title: const Text('TaxiCorp')),
       body: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             ElevatedButton(
               onPressed: _showOverlay,
-              child: const Text('Show Overlay'),
+              child: const Text('Activar Overlay'),
             ),
             const SizedBox(height: 10),
             ElevatedButton(
               onPressed: () async {
                 await FlutterOverlayWindow.closeOverlay();
+                setState(() => _isOverlayActive = false);
               },
-              child: const Text('Close Overlay'),
-            ),
-            const SizedBox(height: 10),
-            ElevatedButton(
-              onPressed: () async {
-                try {
-                  debugPrint("Intentando enviar mensaje al overlay");
-                  await FlutterOverlayWindow.shareData('Mensaje desde principal');
-                } on Error  {
-                  debugPrint("Error al enviar mensaje");
-                }
-              },
-              child: const Text('Mensaje al Overlay'),
+              child: const Text('Cerrar Overlay'),
             ),
           ],
         ),
@@ -159,97 +149,155 @@ class OverlayPage extends StatefulWidget {
   State<OverlayPage> createState() => _OverlayPageState();
 }
 
-class _OverlayPageState extends State<OverlayPage> {
+class _OverlayPageState extends State<OverlayPage> with WidgetsBindingObserver {
+  StreamSubscription<Position>? _positionStream;
+  bool _isTracking = false;
+  final DatabaseReference _dbRef = FirebaseDatabase.instance.ref("usuarios");
+  final LocationSettings _locationSettings = const LocationSettings(
+    accuracy: LocationAccuracy.bestForNavigation,
+    distanceFilter: 10,
+  );
 
-  late StreamSubscription<Position> positionStream;
-  final LocationSettings locationSettings = const LocationSettings(
-      accuracy: LocationAccuracy.high,
-      distanceFilter: 20,
-    );
-DatabaseReference ref = FirebaseDatabase.instance.ref("usuarios");
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _setupOverlayListener();
     
-    iniciarGeolocalizacion();
   }
 
   @override
   void dispose() {
-    // TODO: implement dispose
-   positionStream.cancel();
+    _stopLocationService();
+    WidgetsBinding.instance.removeObserver(this);
+    IsolateNameServer.removePortNameMapping('overlay_channel');
     super.dispose();
   }
 
-  void iniciarGeolocalizacion() async {
-
-   
-     final perm = await Geolocator.checkPermission();
-     print(perm);
-      print('INICIANDO GEOLOCALIZACION EN OVERLAY $perm');
-   
-
-   //if (perm != LocationPermission.whileInUse) {
-   // print('SIN PERMISO');
-   // return;
-   //};
-   
- Geolocator.getPositionStream(locationSettings: locationSettings).listen(
-    (Position? position) {
-        print(position == null ? 'Unknown' : '${position.latitude.toString()}, ${position.longitude.toString()}');
-      ref.child('richardaparicio').set({
-        "nombre": "Richard Aparicio",
-        "tipo": "auto",
-        "latitud":position?.latitude,
-        "longitud":position?.longitude
-      });
-    });
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _startLocationService();
+    }
   }
 
   void _setupOverlayListener() {
     FlutterOverlayWindow.overlayListener.listen((event) {
-      debugPrint("Evento recibido en overlay: $event");
-      // Aquí puedes manejar los eventos recibidos del widget principal
+      debugPrint("Evento recibido: $event");
+      if (event == 'resume_app') {
+        _startLocationService();
+      }
+    });
+
+    final sendPort = IsolateNameServer.lookupPortByName('overlay_channel');
+    if (sendPort != null) {
+      sendPort.send('overlay_ready');
+    }
+  }
+
+  Future<void> _startLocationService() async {
+    if (_isTracking) return;
+
+    final perm = await Geolocator.checkPermission();
+    if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) {
+      debugPrint('Permisos de ubicación no concedidos');
+      return;
+    }
+
+    // Configurar servicio en primer plano para Android
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      await _configureAndroidForegroundService();
+    }
+
+    setState(() => _isTracking = true);
+
+    _positionStream = Geolocator.getPositionStream(
+      locationSettings: _locationSettings,
+    ).listen(
+      (Position? position) {
+        if (position != null) {
+          _updateLocation(position);
+        }
+      },
+      onError: (e) {
+        debugPrint('Error en geolocalización: $e');
+        _stopLocationService();
+      },
+    );
+  }
+
+  Future<void> _configureAndroidForegroundService() async {
+    try {
+      await platform.invokeMethod('configureForegroundService');
+    } on PlatformException catch (e) {
+      debugPrint('Error configurando servicio en primer plano: ${e.message}');
+    }
+  }
+
+  void _stopLocationService() {
+    _positionStream?.cancel();
+    _positionStream = null;
+    setState(() => _isTracking = false);
+    debugPrint('Servicio de ubicación detenido');
+  }
+
+  void _updateLocation(Position position) {
+    _dbRef.child('richardaparicio').update({
+      'latitud': position.latitude,
+      'longitud': position.longitude,
+      'ultima_actualizacion': ServerValue.timestamp,
+    }).catchError((e) {
+      debugPrint('Error al actualizar ubicación: $e');
     });
   }
 
-void sendToMain(String message) {
-  final port = IsolateNameServer.lookupPortByName('overlay_channel');
-  if (port != null) {
-    port.send(message);
-  } else {
-    debugPrint('❌ SendPort no encontrado en el overlay');
+  void _sendToMain(String message) {
+    final port = IsolateNameServer.lookupPortByName('overlay_channel');
+    port?.send(message);
   }
-}
-
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      home: GestureDetector(
-        onTap: (){
-          sendToMain("Mensaje desde el overlay al Main");
-        },
-        child: Container(
-          color: Colors.transparent,
+      home: Scaffold(
+        backgroundColor: Colors.transparent,
+        body: GestureDetector(
+          onTap: (){
+            _startLocationService();
+          },
           child: Center(
             child: Container(
               width: 120,
               height: 120,
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: _isTracking ? Colors.green : Colors.red,
                 shape: BoxShape.circle,
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.2),
+                    color: Colors.black.withOpacity(0.3),
                     blurRadius: 10,
                     spreadRadius: 3,
                   ),
                 ],
               ),
-              child: const Icon(Icons.touch_app, size: 50),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    _isTracking ? Icons.location_on : Icons.location_off,
+                    size: 40,
+                    color: Colors.white,
+                  ),
+                  Text(
+                    _isTracking ? 'ACTIVO' : 'INACTIVO',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -257,4 +305,3 @@ void sendToMain(String message) {
     );
   }
 }
-
