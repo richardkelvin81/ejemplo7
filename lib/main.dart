@@ -4,7 +4,6 @@ import 'dart:ui';
 
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_database/firebase_database.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
@@ -21,10 +20,7 @@ void main() async {
 @pragma("vm:entry-point")
 void overlayMain() {
   WidgetsFlutterBinding.ensureInitialized();
-  
-  Firebase.initializeApp().then((_) {
-    runApp(const OverlayPage());
-  });
+  runApp(const OverlayPage());
 }
 
 class MyApp extends StatelessWidget {
@@ -48,6 +44,9 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   bool _isOverlayActive = false;
+  StreamSubscription<Position>? _locationStream;
+  final DatabaseReference _dbRef = FirebaseDatabase.instance.ref("usuarios");
+  final ReceivePort _receivePort = ReceivePort();
 
   @override
   void initState() {
@@ -59,15 +58,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _stopLocationUpdates();
     WidgetsBinding.instance.removeObserver(this);
+    IsolateNameServer.removePortNameMapping('overlay_channel');
+    _receivePort.close();
     super.dispose();
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed && _isOverlayActive) {
-      FlutterOverlayWindow.shareData('resume_app');
-    }
   }
 
   Future<void> _checkLocationPermission() async {
@@ -78,25 +73,62 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   void _setupOverlayListener() {
-    final receivePort = ReceivePort();
-    IsolateNameServer.registerPortWithName(receivePort.sendPort, 'overlay_channel');
+    IsolateNameServer.registerPortWithName(_receivePort.sendPort, 'overlay_channel');
 
-    receivePort.listen((message) async {
+    _receivePort.listen((message) async {
       debugPrint('Mensaje desde overlay: $message');
-      if (message == 'overlay_closed') {
+      
+      if (message == 'request_location') {
+        _sendCurrentLocation();
+      } else if (message == 'overlay_closed') {
         setState(() => _isOverlayActive = false);
+        _stopLocationUpdates();
       }
-      await platform.invokeMethod('bringToFront');
     });
+  }
+
+  Future<void> _sendCurrentLocation() async {
+    try {
+      final position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.bestForNavigation,
+      );
+      
+      _dbRef.child('richardaparicio').update({
+        'latitud': position.latitude,
+        'longitud': position.longitude,
+        'ultima_actualizacion': ServerValue.timestamp,
+      });
+      
+      debugPrint('Ubicación enviada: ${position.latitude}, ${position.longitude}');
+    } catch (e) {
+      debugPrint('Error obteniendo ubicación: $e');
+    }
+  }
+
+  void _startLocationUpdates() {
+    _locationStream = Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.bestForNavigation,
+        distanceFilter: 10,
+      ),
+    ).listen((position) {
+      _dbRef.child('richardaparicio').update({
+        'latitud': position.latitude,
+        'longitud': position.longitude,
+        'ultima_actualizacion': ServerValue.timestamp,
+      });
+    });
+  }
+
+  void _stopLocationUpdates() {
+    _locationStream?.cancel();
+    _locationStream = null;
   }
 
   Future<void> _showOverlay() async {
     if (!await FlutterOverlayWindow.isPermissionGranted()) {
       await FlutterOverlayWindow.requestPermission();
-      if (!await FlutterOverlayWindow.isPermissionGranted()) {
-        debugPrint('Permiso denegado para mostrar overlay');
-        return;
-      }
+      if (!await FlutterOverlayWindow.isPermissionGranted()) return;
     }
 
     if (await FlutterOverlayWindow.isActive()) return;
@@ -113,6 +145,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     );
 
     setState(() => _isOverlayActive = true);
+    _startLocationUpdates();
   }
 
   @override
@@ -132,6 +165,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               onPressed: () async {
                 await FlutterOverlayWindow.closeOverlay();
                 setState(() => _isOverlayActive = false);
+                _stopLocationUpdates();
               },
               child: const Text('Cerrar Overlay'),
             ),
@@ -149,111 +183,32 @@ class OverlayPage extends StatefulWidget {
   State<OverlayPage> createState() => _OverlayPageState();
 }
 
-class _OverlayPageState extends State<OverlayPage> with WidgetsBindingObserver {
-  StreamSubscription<Position>? _positionStream;
-  bool _isTracking = false;
-  final DatabaseReference _dbRef = FirebaseDatabase.instance.ref("usuarios");
-  final LocationSettings _locationSettings = const LocationSettings(
-    accuracy: LocationAccuracy.bestForNavigation,
-    distanceFilter: 10,
-  );
+class _OverlayPageState extends State<OverlayPage> {
+  Timer? _locationRequestTimer;
+  final SendPort? _sendPort = IsolateNameServer.lookupPortByName('overlay_channel');
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    _setupOverlayListener();
     
   }
 
   @override
   void dispose() {
-    _stopLocationService();
-    WidgetsBinding.instance.removeObserver(this);
-    IsolateNameServer.removePortNameMapping('overlay_channel');
+    _locationRequestTimer?.cancel();
+    _sendPort?.send('overlay_closed');
     super.dispose();
   }
 
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      _startLocationService();
-    }
-  }
-
-  void _setupOverlayListener() {
-    FlutterOverlayWindow.overlayListener.listen((event) {
-      debugPrint("Evento recibido: $event");
-      if (event == 'resume_app') {
-        _startLocationService();
-      }
+  void _startRequestingLocation() {
+    // Enviar primera solicitud inmediatamente
+    _sendPort?.send('request_location');
+    
+    // Configurar timer para solicitudes periódicas
+    _locationRequestTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
+      _sendPort?.send('request_location');
+      debugPrint('Solicitando ubicación...');
     });
-
-    final sendPort = IsolateNameServer.lookupPortByName('overlay_channel');
-    if (sendPort != null) {
-      sendPort.send('overlay_ready');
-    }
-  }
-
-  Future<void> _startLocationService() async {
-    if (_isTracking) return;
-
-    final perm = await Geolocator.checkPermission();
-    if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) {
-      debugPrint('Permisos de ubicación no concedidos');
-      return;
-    }
-
-    // Configurar servicio en primer plano para Android
-    if (defaultTargetPlatform == TargetPlatform.android) {
-      await _configureAndroidForegroundService();
-    }
-
-    setState(() => _isTracking = true);
-
-    _positionStream = Geolocator.getPositionStream(
-      locationSettings: _locationSettings,
-    ).listen(
-      (Position? position) {
-        if (position != null) {
-          _updateLocation(position);
-        }
-      },
-      onError: (e) {
-        debugPrint('Error en geolocalización: $e');
-        _stopLocationService();
-      },
-    );
-  }
-
-  Future<void> _configureAndroidForegroundService() async {
-    try {
-      await platform.invokeMethod('configureForegroundService');
-    } on PlatformException catch (e) {
-      debugPrint('Error configurando servicio en primer plano: ${e.message}');
-    }
-  }
-
-  void _stopLocationService() {
-    _positionStream?.cancel();
-    _positionStream = null;
-    setState(() => _isTracking = false);
-    debugPrint('Servicio de ubicación detenido');
-  }
-
-  void _updateLocation(Position position) {
-    _dbRef.child('richardaparicio').update({
-      'latitud': position.latitude,
-      'longitud': position.longitude,
-      'ultima_actualizacion': ServerValue.timestamp,
-    }).catchError((e) {
-      debugPrint('Error al actualizar ubicación: $e');
-    });
-  }
-
-  void _sendToMain(String message) {
-    final port = IsolateNameServer.lookupPortByName('overlay_channel');
-    port?.send(message);
   }
 
   @override
@@ -264,14 +219,15 @@ class _OverlayPageState extends State<OverlayPage> with WidgetsBindingObserver {
         backgroundColor: Colors.transparent,
         body: GestureDetector(
           onTap: (){
-            _startLocationService();
+            //_sendPort?.send('overlay_tapped')
+            _startRequestingLocation();
           },
           child: Center(
             child: Container(
-              width: 120,
-              height: 120,
+              width: 150,
+              height: 150,
               decoration: BoxDecoration(
-                color: _isTracking ? Colors.green : Colors.red,
+                color: Colors.blue[800],
                 shape: BoxShape.circle,
                 boxShadow: [
                   BoxShadow(
@@ -281,19 +237,16 @@ class _OverlayPageState extends State<OverlayPage> with WidgetsBindingObserver {
                   ),
                 ],
               ),
-              child: Column(
+              child: const Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(
-                    _isTracking ? Icons.location_on : Icons.location_off,
-                    size: 40,
-                    color: Colors.white,
-                  ),
+                  Icon(Icons.directions_car, size: 50, color: Colors.white),
                   Text(
-                    _isTracking ? 'ACTIVO' : 'INACTIVO',
-                    style: const TextStyle(
+                    'ACTIVO',
+                    style: TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.bold,
+                      fontSize: 18,
                     ),
                   ),
                 ],
