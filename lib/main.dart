@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:isolate';
 import 'dart:ui';
 
+import 'package:ejemplo7/firebase_options.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
@@ -9,18 +10,31 @@ import 'package:flutter/services.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 import 'package:geolocator/geolocator.dart';
 
+
 const platform = MethodChannel('flutter_overlay_channel');
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp();
+
+   
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+
   runApp(const MyApp());
 }
 
 @pragma("vm:entry-point")
-void overlayMain() {
+void overlayMain() async {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(const OverlayPage());
+   await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+
+  runApp(
+    const  OverlayPage(),
+    
+  );
 }
 
 class MyApp extends StatelessWidget {
@@ -42,132 +56,129 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
-  bool _isOverlayActive = false;
-  StreamSubscription<Position>? _locationStream;
-  final DatabaseReference _dbRef = FirebaseDatabase.instance.ref("usuarios");
-  final ReceivePort _receivePort = ReceivePort();
+class _HomePageState extends State<HomePage> {
+    final LocationSettings locationSettings = const LocationSettings(
+      accuracy: LocationAccuracy.high,
+      distanceFilter: 20,
+    );
+DatabaseReference ref = FirebaseDatabase.instance.ref("usuarios");
+ 
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
     _setupOverlayListener();
-    _checkLocationPermission();
+   iniciarGeolocalizacion();
   }
 
-  @override
-  void dispose() {
-    _stopLocationUpdates();
-    WidgetsBinding.instance.removeObserver(this);
-    IsolateNameServer.removePortNameMapping('overlay_channel');
-    _receivePort.close();
-    super.dispose();
+  void iniciarGeolocalizacion() async {
+     final perm = await Geolocator.checkPermission();
+     if (perm != LocationPermission.whileInUse) Geolocator.requestPermission();
   }
 
-  Future<void> _checkLocationPermission() async {
-    final perm = await Geolocator.checkPermission();
-    if (perm != LocationPermission.whileInUse && perm != LocationPermission.always) {
-      await Geolocator.requestPermission();
-    }
-  }
+  void _setupOverlayListener()  {
+       final receivePort = ReceivePort();
+  IsolateNameServer.registerPortWithName(receivePort.sendPort, 'overlay_channel');
 
-  void _setupOverlayListener() {
-    IsolateNameServer.registerPortWithName(_receivePort.sendPort, 'overlay_channel');
-
-    _receivePort.listen((message) async {
-      debugPrint('Mensaje desde overlay: $message');
-      
-      if (message == 'request_location') {
-        _sendCurrentLocation();
-      } else if (message == 'overlay_closed') {
-        setState(() => _isOverlayActive = false);
-        _stopLocationUpdates();
-      }
-    });
-  }
-
-  Future<void> _sendCurrentLocation() async {
-    try {
-      final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.bestForNavigation,
+  receivePort.listen((message) async {
+    debugPrint('💬 Mensaje desde overlay: $message');
+    // Aquí manejas los datos del overlay
+    // await platform.invokeMethod('bringToFront');
+    ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Mensaje del overlay: $message')),
       );
-      
-      _dbRef.child('richardaparicio').update({
-        'latitud': position.latitude,
-        'longitud': position.longitude,
-        'ultima_actualizacion': ServerValue.timestamp,
-      });
-      
-      debugPrint('Ubicación enviada: ${position.latitude}, ${position.longitude}');
-    } catch (e) {
-      debugPrint('Error obteniendo ubicación: $e');
-    }
+
+      if (message=='transmitir'){
+        transmitir();
+      }
+  });
+    
   }
 
-  void _startLocationUpdates() {
-    _locationStream = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.bestForNavigation,
-        distanceFilter: 10,
-      ),
-    ).listen((position) {
-      _dbRef.child('richardaparicio').update({
-        'latitud': position.latitude,
-        'longitud': position.longitude,
-        'ultima_actualizacion': ServerValue.timestamp,
-      });
-    });
-  }
-
-  void _stopLocationUpdates() {
-    _locationStream?.cancel();
-    _locationStream = null;
-  }
 
   Future<void> _showOverlay() async {
-    if (!await FlutterOverlayWindow.isPermissionGranted()) {
+    final hasPermission = await FlutterOverlayWindow.isPermissionGranted();
+
+    if (!hasPermission) {
       await FlutterOverlayWindow.requestPermission();
-      if (!await FlutterOverlayWindow.isPermissionGranted()) return;
     }
 
-    if (await FlutterOverlayWindow.isActive()) return;
+    if (await FlutterOverlayWindow.isPermissionGranted()) {
+      if (await FlutterOverlayWindow.isActive()) {
+        return;
+      }
+       
+      await FlutterOverlayWindow.showOverlay(
+        enableDrag: true,
+        overlayTitle: "TAXICORP",
+        overlayContent: 'Estas activo',
+        flag: OverlayFlag.defaultFlag,
+        visibility: NotificationVisibility.visibilityPublic,
+        positionGravity: PositionGravity.auto,
+        height: (MediaQuery.of(context).size.height * 0.6).toInt(),
+        width: WindowSize.matchParent,
+        startPosition: const OverlayPosition(0, -259),
+      );
+    } else {
+      debugPrint('Permiso DENEGADO: Mostrar sobre otras apps');
+    }
+  }
 
-    await FlutterOverlayWindow.showOverlay(
-      enableDrag: true,
-      overlayTitle: "TAXICORP",
-      overlayContent: 'Estás activo',
-      flag: OverlayFlag.defaultFlag,
-      visibility: NotificationVisibility.visibilityPublic,
-      positionGravity: PositionGravity.auto,
-      height: 200,
-      width: WindowSize.matchParent,
-    );
+  transmitir () async {
 
-    setState(() => _isOverlayActive = true);
-    _startLocationUpdates();
+     ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Transmitiendo posicion')),
+      );
+   Position position = await Geolocator.getCurrentPosition(locationSettings: locationSettings);
+    ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Posicion ${position.latitude},${position.longitude} ')),
+      );
+   await ref.child('richardaparicio').set({
+        "nombre": "Richard Aparicio",
+        "tipo": "auto",
+        "latitud":position.latitude,
+        "longitud":position.longitude,
+       
+      });
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('TaxiCorp')),
+      appBar: AppBar(title: const Text('Overlay Example')),
       body: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             ElevatedButton(
               onPressed: _showOverlay,
-              child: const Text('Activar Overlay'),
+              child: const Text('Show Overlay'),
             ),
             const SizedBox(height: 10),
             ElevatedButton(
               onPressed: () async {
                 await FlutterOverlayWindow.closeOverlay();
-                setState(() => _isOverlayActive = false);
-                _stopLocationUpdates();
               },
-              child: const Text('Cerrar Overlay'),
+              child: const Text('Close Overlay'),
+            ),
+            const SizedBox(height: 10),
+            ElevatedButton(
+              onPressed: () async {
+                try {
+                  debugPrint("Intentando enviar mensaje al overlay");
+                  await FlutterOverlayWindow.shareData('Mensaje desde principal');
+                } on Error  {
+                  debugPrint("Error al enviar mensaje");
+                }
+              },
+              child: const Text('Mensaje al Overlay'),
+            ),
+             const SizedBox(height: 10),
+            ElevatedButton(
+              onPressed: () async {
+               transmitir();
+              },
+              child: const Text('Transmitir ubicacion'),
             ),
           ],
         ),
@@ -184,73 +195,69 @@ class OverlayPage extends StatefulWidget {
 }
 
 class _OverlayPageState extends State<OverlayPage> {
-  Timer? _locationRequestTimer;
-  final SendPort? _sendPort = IsolateNameServer.lookupPortByName('overlay_channel');
+
+
 
   @override
   void initState() {
     super.initState();
+    _setupOverlayListener();
     
+
   }
 
   @override
   void dispose() {
-    _locationRequestTimer?.cancel();
-    _sendPort?.send('overlay_closed');
+    // TODO: implement dispose
+
     super.dispose();
   }
 
-  void _startRequestingLocation() {
-    // Enviar primera solicitud inmediatamente
-    _sendPort?.send('request_location');
-    
-    // Configurar timer para solicitudes periódicas
-    _locationRequestTimer = Timer.periodic(const Duration(seconds: 10), (timer) {
-      _sendPort?.send('request_location');
-      debugPrint('Solicitando ubicación...');
+  
+
+  void _setupOverlayListener() {
+    FlutterOverlayWindow.overlayListener.listen((event) {
+      debugPrint("Evento recibido en overlay: $event");
+      // Aquí puedes manejar los eventos recibidos del widget principal
     });
   }
+
+void sendToMain(String message) {
+  final port = IsolateNameServer.lookupPortByName('overlay_channel');
+  if (port != null) {
+    port.send(message);
+  } else {
+    debugPrint('❌ SendPort no encontrado en el overlay');
+  }
+}
+
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      home: Scaffold(
-        backgroundColor: Colors.transparent,
-        body: GestureDetector(
-          onTap: (){
-            //_sendPort?.send('overlay_tapped')
-            _startRequestingLocation();
-          },
+      home: GestureDetector(
+        onTap: (){
+          sendToMain("transmitir");
+        },
+        child: Container(
+          color: Colors.transparent,
           child: Center(
             child: Container(
-              width: 150,
-              height: 150,
+              width: 120,
+              height: 120,
               decoration: BoxDecoration(
-                color: Colors.blue[800],
+                color: Colors.white,
                 shape: BoxShape.circle,
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.3),
+                    color: Colors.black.withOpacity(0.2),
                     blurRadius: 10,
                     spreadRadius: 3,
                   ),
                 ],
               ),
-              child: const Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.directions_car, size: 50, color: Colors.white),
-                  Text(
-                    'ACTIVO',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 18,
-                    ),
-                  ),
-                ],
-              ),
+              child: const Icon(Icons.touch_app, size: 50),
             ),
           ),
         ),
