@@ -2,39 +2,23 @@ import 'dart:async';
 import 'dart:isolate';
 import 'dart:ui';
 
-import 'package:ejemplo7/firebase_options.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 import 'package:geolocator/geolocator.dart';
 
-
-const platform = MethodChannel('flutter_overlay_channel');
-
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
-   
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
-
+  await Firebase.initializeApp();
   runApp(const MyApp());
 }
 
 @pragma("vm:entry-point")
 void overlayMain() async {
   WidgetsFlutterBinding.ensureInitialized();
-   await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
-
-  runApp(
-    const  OverlayPage(),
-    
-  );
+  await Firebase.initializeApp();
+  runApp(const OverlayPage());
 }
 
 class MyApp extends StatelessWidget {
@@ -57,132 +41,35 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-    final LocationSettings locationSettings = const LocationSettings(
-      accuracy: LocationAccuracy.high,
-      distanceFilter: 20,
-    );
-DatabaseReference ref = FirebaseDatabase.instance.ref("usuarios");
- 
-
-  @override
-  void initState() {
-    super.initState();
-    _setupOverlayListener();
-   iniciarGeolocalizacion();
-  }
-
-  void iniciarGeolocalizacion() async {
-     final perm = await Geolocator.checkPermission();
-     if (perm != LocationPermission.whileInUse) Geolocator.requestPermission();
-  }
-
-  void _setupOverlayListener()  {
-       final receivePort = ReceivePort();
-  IsolateNameServer.registerPortWithName(receivePort.sendPort, 'overlay_channel');
-
-  receivePort.listen((message) async {
-    debugPrint('💬 Mensaje desde overlay: $message');
-    // Aquí manejas los datos del overlay
-    // await platform.invokeMethod('bringToFront');
-    ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Mensaje del overlay: $message')),
-      );
-
-      if (message=='transmitir'){
-        transmitir();
-      }
-  });
-    
-  }
-
-
-  Future<void> _showOverlay() async {
-    final hasPermission = await FlutterOverlayWindow.isPermissionGranted();
-
-    if (!hasPermission) {
-      await FlutterOverlayWindow.requestPermission();
-    }
-
-    if (await FlutterOverlayWindow.isPermissionGranted()) {
-      if (await FlutterOverlayWindow.isActive()) {
-        return;
-      }
-       
-      await FlutterOverlayWindow.showOverlay(
-        enableDrag: true,
-        overlayTitle: "TAXICORP",
-        overlayContent: 'Estas activo',
-        flag: OverlayFlag.defaultFlag,
-        visibility: NotificationVisibility.visibilityPublic,
-        positionGravity: PositionGravity.auto,
-        height: (MediaQuery.of(context).size.height * 0.6).toInt(),
-        width: WindowSize.matchParent,
-        startPosition: const OverlayPosition(0, -259),
-      );
-    } else {
-      debugPrint('Permiso DENEGADO: Mostrar sobre otras apps');
-    }
-  }
-
-  transmitir () async {
-
-     ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Transmitiendo posicion')),
-      );
-   Position position = await Geolocator.getCurrentPosition(locationSettings: locationSettings);
-    ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Posicion ${position.latitude},${position.longitude} ')),
-      );
-   await ref.child('richardaparicio').set({
-        "nombre": "Richard Aparicio",
-        "tipo": "auto",
-        "latitud":position.latitude,
-        "longitud":position.longitude,
-       
-      });
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Overlay Example')),
+      appBar: AppBar(title: const Text('TaxiCorp Overlay')),
       body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            ElevatedButton(
-              onPressed: _showOverlay,
-              child: const Text('Show Overlay'),
-            ),
-            const SizedBox(height: 10),
-            ElevatedButton(
-              onPressed: () async {
-                await FlutterOverlayWindow.closeOverlay();
-              },
-              child: const Text('Close Overlay'),
-            ),
-            const SizedBox(height: 10),
-            ElevatedButton(
-              onPressed: () async {
-                try {
-                  debugPrint("Intentando enviar mensaje al overlay");
-                  await FlutterOverlayWindow.shareData('Mensaje desde principal');
-                } on Error  {
-                  debugPrint("Error al enviar mensaje");
-                }
-              },
-              child: const Text('Mensaje al Overlay'),
-            ),
-             const SizedBox(height: 10),
-            ElevatedButton(
-              onPressed: () async {
-               transmitir();
-              },
-              child: const Text('Transmitir ubicacion'),
-            ),
-          ],
+        child: ElevatedButton(
+          onPressed: _showOverlay,
+          child: const Text('Activar Overlay'),
         ),
       ),
+    );
+  }
+
+  Future<void> _showOverlay() async {
+    if (!await FlutterOverlayWindow.isPermissionGranted()) {
+      await FlutterOverlayWindow.requestPermission();
+    }
+    
+    if (await FlutterOverlayWindow.isActive()) return;
+    
+    await FlutterOverlayWindow.showOverlay(
+      enableDrag: true,
+      overlayTitle: "TAXICORP",
+      overlayContent: 'Modo conductor activo',
+      flag: OverlayFlag.defaultFlag,
+      visibility: NotificationVisibility.visibilityPublic,
+      positionGravity: PositionGravity.auto,
+      height: 150,
+      width: 150,
     );
   }
 }
@@ -195,69 +82,124 @@ class OverlayPage extends StatefulWidget {
 }
 
 class _OverlayPageState extends State<OverlayPage> {
-
-
+  final LocationSettings _locationSettings = AndroidSettings(
+    accuracy: LocationAccuracy.high,
+    distanceFilter: 20,
+    forceLocationManager: true, // Usar el LocationManager más antiguo pero confiable
+    intervalDuration: const Duration(seconds: 10),
+    foregroundNotificationConfig: const ForegroundNotificationConfig(
+      notificationText: "TaxiCorp está obteniendo tu ubicación",
+      notificationTitle: "Modo conductor activo",
+      enableWakeLock: true,
+    ),
+  );
+  
+  late DatabaseReference _dbRef;
+  StreamSubscription<Position>? _positionStream;
+  bool _isActive = false;
+  Timer? _updateTimer;
 
   @override
   void initState() {
     super.initState();
-    _setupOverlayListener();
-    
-
+    _dbRef = FirebaseDatabase.instance.ref("usuarios/richardaparicio");
+    _initLocationService();
   }
 
   @override
   void dispose() {
-    // TODO: implement dispose
-
+    _positionStream?.cancel();
+    _updateTimer?.cancel();
     super.dispose();
   }
 
-  
+  Future<void> _initLocationService() async {
+    final hasPermission = await _handleLocationPermission();
+    if (!hasPermission) return;
+    
+    setState(() => _isActive = true);
+    _startPeriodicUpdates();
+  }
 
-  void _setupOverlayListener() {
-    FlutterOverlayWindow.overlayListener.listen((event) {
-      debugPrint("Evento recibido en overlay: $event");
-      // Aquí puedes manejar los eventos recibidos del widget principal
+  Future<bool> _handleLocationPermission() async {
+    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      return false;
+    }
+    
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.denied) {
+        return false;
+      }
+    }
+    
+    return permission == LocationPermission.whileInUse;
+  }
+
+  void _startPeriodicUpdates() {
+    // Actualización inmediata al iniciar
+    _updateLocation();
+    
+    // Configurar actualizaciones periódicas
+    _updateTimer = Timer.periodic(const Duration(seconds: 15), (timer) {
+      _updateLocation();
     });
   }
 
-void sendToMain(String message) {
-  final port = IsolateNameServer.lookupPortByName('overlay_channel');
-  if (port != null) {
-    port.send(message);
-  } else {
-    debugPrint('❌ SendPort no encontrado en el overlay');
+  Future<void> _updateLocation() async {
+    try {
+      final position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+      );
+      
+      await _dbRef.update({
+        "latitud": position.latitude,
+        "longitud": position.longitude,
+        "timestamp": ServerValue.timestamp,
+      });
+    } catch (e) {
+      debugPrint('Error al actualizar ubicación: $e');
+    }
   }
-}
-
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
+      color: Colors.transparent,
       home: GestureDetector(
-        onTap: (){
-          sendToMain("transmitir");
+        onTap: () {
+          setState(() => _isActive = !_isActive);
+          if (_isActive) {
+            _startPeriodicUpdates();
+          } else {
+            _updateTimer?.cancel();
+          }
         },
         child: Container(
-          color: Colors.transparent,
-          child: Center(
-            child: Container(
-              width: 120,
-              height: 120,
-              decoration: BoxDecoration(
-                color: Colors.white,
-                shape: BoxShape.circle,
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.2),
-                    blurRadius: 10,
-                    spreadRadius: 3,
-                  ),
-                ],
-              ),
-              child: const Icon(Icons.touch_app, size: 50),
+          width: 120,
+          height: 120,
+          alignment: Alignment.center,
+          child: Container(
+            width: 100,
+            height: 100,
+            decoration: BoxDecoration(
+              color: _isActive ? Colors.green : Colors.red,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.3),
+                  blurRadius: 10,
+                  spreadRadius: 3,
+                ),
+              ],
+            ),
+            child: Icon(
+              _isActive ? Icons.directions_car : Icons.location_off,
+              color: Colors.white,
+              size: 40,
             ),
           ),
         ),
