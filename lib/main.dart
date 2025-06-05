@@ -1,99 +1,41 @@
 import 'dart:async';
-import 'dart:isolate';
-import 'dart:ui';
 
+import 'package:ejemplo7/expanded_fab.dart';
+import 'package:ejemplo7/expanded_fab2.dart';
+import 'package:ejemplo7/location_service.dart';
+import 'package:ejemplo7/overlay_page.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_database/firebase_database.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
-import 'package:geolocator/geolocator.dart';
-import 'package:android_alarm_manager_plus/android_alarm_manager_plus.dart';
+
+
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
-  
-  // Inicializar alarm manager
-  await AndroidAlarmManager.initialize();
-  
-  runApp(const MyApp());
+  runApp(
+   const  MyApp());
 }
-
+// overlay entry point
 @pragma("vm:entry-point")
 void overlayMain() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
-  
-  // Iniciar servicio de ubicación
-  await _startLocationService();
-  
-  runApp(const OverlayPage());
+  runApp( const MaterialApp(
+    debugShowCheckedModeBanner: false,
+    home: FuturisticFABApp2()));
 }
 
-@pragma("vm:entry-point")
-Future<void> _startLocationService() async {
-  // Configuración para Android
-  final androidSettings = AndroidSettings(
-    accuracy: LocationAccuracy.high,
-    distanceFilter: 20,
-    foregroundNotificationConfig: ForegroundNotificationConfig(
-      notificationTitle: "TaxiCorp en movimiento",
-      notificationText: "Obteniendo ubicación actual",
-      notificationIcon: AndroidResource(name: 'ic_notification'),
-    ),
-  );
-  
-  // Verificar permisos
-  final hasPermission = await _checkLocationPermission();
-  if (!hasPermission) return;
-  
-  // Obtener posición actual inmediatamente
-  await _updateLocation();
-  
-  // Configurar temporizador para actualizaciones periódicas
-  Timer.periodic(const Duration(seconds: 30), (timer) async {
-    await _updateLocation();
-  });
-}
-
-@pragma("vm:entry-point")
-Future<bool> _checkLocationPermission() async {
-  bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-  if (!serviceEnabled) return false;
-  
-  LocationPermission permission = await Geolocator.checkPermission();
-  if (permission == LocationPermission.denied) {
-    permission = await Geolocator.requestPermission();
-    if (permission == LocationPermission.denied) {
-      return false;
-    }
-  }
-  
-  return permission == LocationPermission.whileInUse;
-}
-
-@pragma("vm:entry-point")
-Future<void> _updateLocation() async {
-  try {
-    final position = await Geolocator.getCurrentPosition(
-      desiredAccuracy: LocationAccuracy.high,
-    );
-    
-    await FirebaseDatabase.instance
-        .ref("usuarios/richardaparicio")
-        .update({
-          "latitud": position.latitude,
-          "longitud": position.longitude,
-          "timestamp": ServerValue.timestamp,
-        });
-  } catch (e) {
-    print('Error updating location: $e');
-  }
-}
-
-class MyApp extends StatelessWidget {
+class MyApp extends StatefulWidget {
   const MyApp({super.key});
 
+  @override
+  State<MyApp> createState() => _MyAppState();
+}
+
+class _MyAppState extends State<MyApp> {
+   
   @override
   Widget build(BuildContext context) {
     return const MaterialApp(
@@ -111,20 +53,21 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
+
+
   @override
   void initState() {
+    
     super.initState();
-    _checkPermissions();
+  }
+  @override
+  void dispose() {
+
+
+    super.dispose();
   }
 
-  Future<void> _checkPermissions() async {
-    final status = await Geolocator.checkPermission();
-    if (status == LocationPermission.denied) {
-      await Geolocator.requestPermission();
-    }
-  }
-
-  Future<void> _showOverlay() async {
+  Future<void> showOverlay() async {
     if (!await FlutterOverlayWindow.isPermissionGranted()) {
       await FlutterOverlayWindow.requestPermission();
     }
@@ -138,128 +81,60 @@ class _HomePageState extends State<HomePage> {
       flag: OverlayFlag.defaultFlag,
       visibility: NotificationVisibility.visibilityPublic,
       positionGravity: PositionGravity.auto,
-      height: 120,
-      width: 120,
-    );
-    
-    // Programar alarma periódica como respaldo
-    await AndroidAlarmManager.periodic(
-      const Duration(minutes: 15),
-      0,
-      _updateLocation,
-      exact: true,
-      wakeup: true,
+      height: 300,
+      width: 300,
     );
   }
 
+    Future<void> closeOverlay() async {
+   
+    await FlutterOverlayWindow.closeOverlay();
+  }
+
+  
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('TaxiCorp Driver')),
+      appBar: AppBar(title: const Text('TaxiCorp OVELAY')),
       body: Center(
-        child: ElevatedButton(
-          onPressed: _showOverlay,
-          child: const Text('Activar Overlay'),
+        child: Column(
+          children: [
+            ElevatedButton(
+              onPressed: (){
+                showOverlay();
+              },
+              child: const Text('Activar Overlay'),
+            ),
+           const  SizedBox(height: 10,),
+            
+             ElevatedButton(
+              onPressed: (){
+                closeOverlay();
+              },
+              child: const Text('Cerrar Overlay'),
+            ),
+
+            const  SizedBox(height: 10,),
+             ElevatedButton(
+              onPressed: () async {
+                  LocationService().startService();
+              },
+              child: const Text('Start Background location'),
+            ),
+              const  SizedBox(height: 10,),
+             ElevatedButton(
+              onPressed: () async {
+                
+                 LocationService().stopService();
+                
+              },
+              child: const Text('STOP Background location'),
+            ),
+          ],
         ),
       ),
     );
   }
-}
 
-class OverlayPage extends StatefulWidget {
-  const OverlayPage({super.key});
 
-  @override
-  State<OverlayPage> createState() => _OverlayPageState();
-}
-
-class _OverlayPageState extends State<OverlayPage> {
-  bool _isActive = true;
-  Timer? _locationTimer;
-
-  @override
-  void initState() {
-    super.initState();
-    _startLocationUpdates();
-  }
-
-  @override
-  void dispose() {
-    _locationTimer?.cancel();
-    super.dispose();
-  }
-
-  void _startLocationUpdates() {
-    // Actualización inmediata
-    _updateLocation();
-    
-    // Configurar temporizador para actualizaciones periódicas
-    _locationTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
-      _updateLocation();
-    });
-  }
-
-  Future<void> _updateLocation() async {
-    try {
-      final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-      );
-      
-      await FirebaseDatabase.instance
-          .ref("usuarios/richardaparicio")
-          .update({
-            "latitud": position.latitude,
-            "longitud": position.longitude,
-            "timestamp": ServerValue.timestamp,
-          });
-    } catch (e) {
-      debugPrint('Error updating location: $e');
-    }
-  }
-
-  void _toggleService() {
-    setState(() {
-      _isActive = !_isActive;
-      if (_isActive) {
-        _startLocationUpdates();
-      } else {
-        _locationTimer?.cancel();
-      }
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: GestureDetector(
-        onTap: _toggleService,
-        child: Container(
-          width: double.infinity,
-          height: double.infinity,
-          alignment: Alignment.center,
-          child: Container(
-            width: 100,
-            height: 100,
-            decoration: BoxDecoration(
-              color: _isActive ? Colors.green : Colors.red,
-              shape: BoxShape.circle,
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.3),
-                  blurRadius: 10,
-                  spreadRadius: 3,
-                ),
-              ],
-            ),
-            child: Icon(
-              _isActive ? Icons.directions_car : Icons.location_off,
-              color: Colors.white,
-              size: 40,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 }
